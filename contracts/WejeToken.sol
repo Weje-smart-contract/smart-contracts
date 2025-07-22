@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /**
  * @title WejeToken
@@ -20,6 +21,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  * - Improved blacklist validation
  */
 contract WejeToken is ERC20, ERC20Permit, Pausable, Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
     
     // ============ CONSTANTS ============
     uint256 public constant MAX_SUPPLY = 1_000_000_000 * 10**18; // 1 billion tokens
@@ -211,7 +213,7 @@ contract WejeToken is ERC20, ERC20Permit, Pausable, Ownable, ReentrancyGuard {
             (bool success, ) = payable(owner()).call{value: amount}("");
             require(success, "ETH transfer failed");
         } else {
-            IERC20(token).transfer(owner(), amount);
+            IERC20(token).safeTransfer(owner(), amount);
         }
     }
     
