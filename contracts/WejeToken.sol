@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.30;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
@@ -132,13 +132,11 @@ contract WejeToken is ERC20, ERC20Permit, Pausable, Ownable, ReentrancyGuard {
     function updateCooldown(uint256 _cooldown) external onlyOwner {
         require(_cooldown <= 1 hours, "Cooldown too high");
         transferCooldown = _cooldown;
-        // FIX: Added missing event
         emit CooldownUpdated(_cooldown);
     }
     
     function setLimitsEnabled(bool _enabled) external onlyOwner {
         limitsEnabled = _enabled;
-        // FIX: Added missing event
         emit LimitsEnabledUpdated(_enabled);
     }
 
@@ -205,8 +203,6 @@ contract WejeToken is ERC20, ERC20Permit, Pausable, Ownable, ReentrancyGuard {
     }
 
     // ============ EMERGENCY FUNCTIONS ============
-    
-    // FIX: Replaced deprecated transfer() with call()
     function emergencyWithdraw(address token, uint256 amount) external onlyOwner {
         if (token == address(0)) {
             // Use call instead of transfer for ETH
