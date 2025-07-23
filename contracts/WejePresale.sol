@@ -34,7 +34,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
         uint256 tokensSold;      // Tokens sold in this tier
         uint256 minPurchase;     // Minimum purchase in USDC
         uint256 maxPurchase;     // Maximum purchase in USDC
-        uint256 bonusPercent;    // Bonus percentage (100 = 1%)
         bool isActive;           // Tier is active
         string name;             // Tier name
     }
@@ -99,7 +98,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
         uint256 tier,
         uint256 usdcAmount,
         uint256 tokenAmount,
-        uint256 bonusAmount,
         address paymentToken,
         address referrer
     );
@@ -165,7 +163,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
             tokensSold: 0,
             minPurchase: 100 * 10**6, // $100
             maxPurchase: 5_000 * 10**6, // $5,000
-            bonusPercent: 2500, // 25%
             isActive: true,
             name: "Early Bird"
         });
@@ -177,7 +174,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
             tokensSold: 0,
             minPurchase: 100 * 10**6,
             maxPurchase: 10_000 * 10**6, // $10,000
-            bonusPercent: 2000, // 20%
             isActive: false,
             name: "Standard"
         });
@@ -189,7 +185,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
             tokensSold: 0,
             minPurchase: 100 * 10**6,
             maxPurchase: 15_000 * 10**6, // $15,000
-            bonusPercent: 1500, // 15%
             isActive: false,
             name: "Growth"
         });
@@ -201,7 +196,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
             tokensSold: 0,
             minPurchase: 100 * 10**6,
             maxPurchase: 20_000 * 10**6, // $20,000
-            bonusPercent: 1000, // 10%
             isActive: false,
             name: "Final"
         });
@@ -270,9 +264,7 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
         if (userPurchases[buyer] + usdcAmount > tier.maxPurchase) revert PurchaseAmountTooHigh();
         
         // FIX: Calculate tokens with better precision (multiply before divide)
-        uint256 baseTokens = (usdcAmount * 10**18) / tier.price;
-        uint256 bonusTokens = (baseTokens * tier.bonusPercent) / 10000;
-        uint256 totalTokens = baseTokens + bonusTokens;
+        uint256 totalTokens = (usdcAmount * 10**18) / tier.price;
         
         // Check if tier has enough tokens
         if (tier.tokensSold + totalTokens > tier.tokensAvailable) {
@@ -307,7 +299,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
         // Handle referral rewards if any
         if (finalReferrer != address(0)) {
             uint256 referralReward = (usdcAmount * referralBonus) / 10000;
-            // FIX: Better precision for referral token calculation
             uint256 referralTokens = (referralReward * 10**18) / tier.price;
             
             if (wejeToken.balanceOf(address(this)) >= referralTokens) {
@@ -342,8 +333,7 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
             buyer, 
             currentTier, 
             usdcAmount, 
-            baseTokens, 
-            bonusTokens, 
+            totalTokens,
             paymentToken,
             finalReferrer
         );
@@ -471,8 +461,7 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
         uint256 price,
         uint256 tokensAvailable,
         uint256 minPurchase,
-        uint256 maxPurchase,
-        uint256 bonusPercent
+        uint256 maxPurchase
     ) external onlyOwner {
         if (tierNumber == 0 || tierNumber > MAX_TIERS) revert InvalidTier();
         
@@ -481,7 +470,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
         tier.tokensAvailable = tokensAvailable;
         tier.minPurchase = minPurchase;
         tier.maxPurchase = maxPurchase;
-        tier.bonusPercent = bonusPercent;
     }
     
     function updateCaps(uint256 _softCap, uint256 _hardCap) external onlyOwner {
@@ -571,7 +559,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
         uint256 tokensRemaining,
         uint256 minPurchase,
         uint256 maxPurchase,
-        uint256 bonusPercent,
         bool isActive
     ) {
         PresaleTier memory tier = tiers[currentTier];
@@ -584,7 +571,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
             tier.tokensAvailable - tier.tokensSold,
             tier.minPurchase,
             tier.maxPurchase,
-            tier.bonusPercent,
             tier.isActive
         );
     }
@@ -597,7 +583,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
         uint256 tokensRemaining,
         uint256 minPurchase,
         uint256 maxPurchase,
-        uint256 bonusPercent,
         bool isActive
     ) {
         PresaleTier memory tier = tiers[tierNumber];
@@ -609,7 +594,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
             tier.tokensAvailable - tier.tokensSold,
             tier.minPurchase,
             tier.maxPurchase,
-            tier.bonusPercent,
             tier.isActive
         );
     }
@@ -659,18 +643,15 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
     }
     
     function calculateTokensForUSDC(uint256 usdcAmount) external view returns (
-        uint256 baseTokens,
-        uint256 bonusTokens,
         uint256 totalTokens,
         uint256 tierNumber,
         string memory tierName
     ) {
         PresaleTier memory tier = tiers[currentTier];
-        baseTokens = (usdcAmount * 10**18) / tier.price;
-        bonusTokens = (baseTokens * tier.bonusPercent) / 10000;
-        totalTokens = baseTokens + bonusTokens;
+        totalTokens = (usdcAmount * 10**18) / tier.price;
         tierNumber = currentTier;
         tierName = tier.name;
+        return (totalTokens, tierNumber, tierName);
     }
     
     function getContractStats() external view returns (
@@ -710,7 +691,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
         uint256[] memory prices,
         uint256[] memory tokensAvailable,
         uint256[] memory tokensSold,
-        uint256[] memory bonusPercents,
         bool[] memory isActive
     ) {
         tierNumbers = new uint256[](MAX_TIERS);
@@ -718,7 +698,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
         prices = new uint256[](MAX_TIERS);
         tokensAvailable = new uint256[](MAX_TIERS);
         tokensSold = new uint256[](MAX_TIERS);
-        bonusPercents = new uint256[](MAX_TIERS);
         isActive = new bool[](MAX_TIERS);
         
         for (uint256 i = 1; i <= MAX_TIERS; i++) {
@@ -728,7 +707,6 @@ contract WejePresale is ReentrancyGuard, Pausable, Ownable {
             prices[i-1] = tier.price;
             tokensAvailable[i-1] = tier.tokensAvailable;
             tokensSold[i-1] = tier.tokensSold;
-            bonusPercents[i-1] = tier.bonusPercent;
             isActive[i-1] = tier.isActive;
         }
     }
