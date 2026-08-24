@@ -1,0 +1,16 @@
+{
+  "contract": "SportsBetting",
+  "network": "polygon",
+  "chainId": 137,
+  "deployer": "0xdFDCfc38Ab514b0a90f1252bCE2a8B127325CA8e",
+  "owner": "0xdFDCfc38Ab514b0a90f1252bCE2a8B127325CA8e",
+  "deploymentTimestamp": "2026-08-24T08:36:28.468Z",
+  "addresses": {
+    "wejeToken": "0xB0412e8EcfDF82197f3dC782803a63EF3557404d",
+    "trustedForwarder": "0x48653CF2F2754Db856159E45893686F4f0F4BA0D",
+    "sportsBetting": "0xdbcd9f7257a1E514FF44E0fFF9bceB16aA935724"
+  },
+  "verificationCommands": [
+    "npx hardhat verify --network polygon 0xdbcd9f7257a1E514FF44E0fFF9bceB16aA935724 0xB0412e8EcfDF82197f3dC782803a63EF3557404d 0x48653CF2F2754Db856159E45893686F4f0F4BA0D"
+  ]
+}

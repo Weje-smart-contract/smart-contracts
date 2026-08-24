@@ -4,27 +4,26 @@ pragma solidity ^0.8.24;
 import "./GameUtil.sol";
 
 contract BlackjackGame is GameUtil {
+    using SafeERC20 for IERC20;
     constructor(address _wejeTokenAddress) GameUtil(_wejeTokenAddress) {}
 
     function createGame(
         GameInfo calldata _game,
         Player calldata player,
         string[] calldata _invPlayers,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
+        PermitParams calldata _permit
     ) external override nonReentrant {
         require(_game.buyIn > 0, "Insufficient buy-in amount");
         bytes memory result = bytes(isPlayerJoined(player.playerId));
         require(result.length == 0, "Player already joined in an active game");
 
         // Call permit first
-        wejeToken.permit(player.walletAddress, address(this), _game.buyIn, deadline, v, r, s);
+        if(_permit.deadline > 0) {
+            try wejeToken.permit(player.walletAddress, address(this), _game.buyIn, _permit.deadline, _permit.v, _permit.r, _permit.s) {} catch {}
+        }
 
         // Then transferFrom
-        bool success = wejeTokenERC20.transferFrom(player.walletAddress, address(this), _game.buyIn);
-        require(success, "Token transfer failed");
+        wejeTokenERC20.safeTransferFrom(player.walletAddress, address(this), _game.buyIn);
 
         Game storage newGame = games[_game.gameId];
         newGame.gameId = _game.gameId;
@@ -54,10 +53,7 @@ contract BlackjackGame is GameUtil {
         string memory gameId,
         Player calldata player,
         uint amount,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
+       PermitParams calldata _permit
     ) external override nonReentrant {
         require(bytes(gameId).length > 0, "Invalid game ID");
         require(bytes(games[gameId].gameId).length > 0, "Game not found");
@@ -67,12 +63,12 @@ contract BlackjackGame is GameUtil {
         // Check if the player is already joined in any active game
         require(findPlayerIndex(games[gameId], player.playerId) == -1, "Player already joined in an active game");
 
-        // Call permit first
-        wejeToken.permit(player.walletAddress, address(this), amount, deadline, v, r, s);
+        if(_permit.deadline > 0) {
+            try wejeToken.permit(player.walletAddress, address(this), amount, _permit.deadline, _permit.v, _permit.r, _permit.s) {} catch {}
+        }
 
         // Then transferFrom
-        bool success = wejeTokenERC20.transferFrom(player.walletAddress, address(this), amount);
-        require(success, "Token transfer failed");
+        wejeTokenERC20.safeTransferFrom(player.walletAddress, address(this), amount);
 
         // Create a new Player struct and initialize it
         Player memory newPlayer;
@@ -134,10 +130,7 @@ contract BlackjackGame is GameUtil {
         string memory playerId,
         uint depositAmount,
         uint256 date,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
+       PermitParams calldata _permit
     ) external override nonReentrant {
         require(bytes(gameId).length > 0, "Invalid game ID");
         require(bytes(games[gameId].gameId).length > 0, "Game not found");
@@ -148,11 +141,12 @@ contract BlackjackGame is GameUtil {
         require(playerIndex != -1, "Player does not exist");
 
         // Call permit first
-        wejeToken.permit(games[gameId].players[uint(playerIndex)].walletAddress, address(this), depositAmount, deadline, v, r, s);
+        if(_permit.deadline > 0) {
+            try wejeToken.permit(games[gameId].players[uint(playerIndex)].walletAddress, address(this), depositAmount, _permit.deadline, _permit.v, _permit.r, _permit.s) {} catch {}
+        }
 
         // Then transferFrom
-        bool success = wejeTokenERC20.transferFrom(games[gameId].players[uint(playerIndex)].walletAddress, address(this), depositAmount);
-        require(success, "Token transfer failed");
+        wejeTokenERC20.safeTransferFrom(games[gameId].players[uint(playerIndex)].walletAddress, address(this), depositAmount);
 
         // Update the player's wallet with the depositAmount
         games[gameId].players[uint(playerIndex)].wallet += depositAmount;

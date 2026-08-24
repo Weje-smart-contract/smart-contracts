@@ -4,26 +4,25 @@ pragma solidity ^0.8.24;
 import "./GameUtil.sol";
 
 contract LudoGame is GameUtil {
+    using SafeERC20 for IERC20;
     constructor(address _wejeTokenAddress) GameUtil(_wejeTokenAddress) {}
 
     function createGame(
         GameInfo calldata _game,
         Player calldata _player,
         string[] calldata _invPlayers,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
+        PermitParams calldata _permit
     ) external override nonReentrant {
         require(bytes(isPlayerJoined(_player.playerId)).length == 0, "Player already joined in an active game");
         require(_game.minBet > 0, "Insufficient buy-in amount");
 
         // Call permit first
-        wejeToken.permit(_player.walletAddress, address(this), _game.minBet, deadline, v, r, s);
+        if(_permit.deadline > 0) {
+            try wejeToken.permit(_player.walletAddress, address(this), _game.minBet, _permit.deadline, _permit.v, _permit.r, _permit.s) {} catch {}
+        }
 
         // Then transferFrom
-        bool success = wejeTokenERC20.transferFrom(_player.walletAddress, address(this), _game.minBet);
-        require(success, "Token transfer failed");
+        wejeTokenERC20.safeTransferFrom(_player.walletAddress, address(this), _game.minBet);
 
         // Initialize the new game
         Game storage newGame = games[_game.gameId];
@@ -55,10 +54,7 @@ contract LudoGame is GameUtil {
         string memory _gameId,
         Player calldata _player,
         uint amount,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
+        PermitParams calldata _permit
     ) external override nonReentrant {
         require(bytes(_gameId).length > 0, "Invalid game ID");
 
@@ -73,11 +69,12 @@ contract LudoGame is GameUtil {
         require(amount >= game.minBet, "Invalid deposit amount");
 
         // Call permit first
-        wejeToken.permit(_player.walletAddress, address(this), amount, deadline, v, r, s);
+        if(_permit.deadline > 0) {
+            try wejeToken.permit(_player.walletAddress, address(this), amount, _permit.deadline, _permit.v, _permit.r, _permit.s) {} catch {}
+        }
 
         // Then transferFrom
-        bool success = wejeTokenERC20.transferFrom(_player.walletAddress, address(this), amount);
-        require(success, "Token transfer failed");
+       wejeTokenERC20.safeTransferFrom(_player.walletAddress, address(this), amount);
 
         // Create a new Player struct and initialize it
         Player memory newPlayer;
@@ -160,10 +157,7 @@ contract LudoGame is GameUtil {
         string memory playerId,
         uint depositAmount,
         uint256 date,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
+        PermitParams calldata _permit
     ) external override nonReentrant {
         require(bytes(gameId).length > 0, "Invalid game ID");
         require(bytes(games[gameId].gameId).length > 0, "Game not found");
@@ -174,11 +168,12 @@ contract LudoGame is GameUtil {
         require(playerIndex != -1, "Player does not exist");
 
         // Call permit first
-        wejeToken.permit(games[gameId].players[uint(playerIndex)].walletAddress, address(this), depositAmount, deadline, v, r, s);
+        if(_permit.deadline > 0) {
+            try wejeToken.permit(games[gameId].players[uint(playerIndex)].walletAddress, address(this), depositAmount, _permit.deadline, _permit.v, _permit.r, _permit.s) {} catch {}
+        }
 
         // Then transferFrom
-        bool success = wejeTokenERC20.transferFrom(games[gameId].players[uint(playerIndex)].walletAddress, address(this), depositAmount);
-        require(success, "Token transfer failed");
+        wejeTokenERC20.safeTransferFrom(games[gameId].players[uint(playerIndex)].walletAddress, address(this), depositAmount);
 
         // Update the player's wallet with the depositAmount
         games[gameId].players[uint(playerIndex)].wallet += depositAmount;
