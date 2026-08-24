@@ -1,345 +1,422 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
-import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ERC2771Context} from "@openzeppelin/contracts/metatx/ERC2771Context.sol";
+import {Context} from "@openzeppelin/contracts/utils/Context.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
+import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract SportsBetting {
+/**
+ * @title SportsBetting
+ * @dev High-performance, secure sports betting contract supporting direct EOA/Smart Account calls,
+ * ERC-2771 meta-transactions, and gas-sponsored EIP-712 signatures with ERC-1271 verification.
+ */
+contract SportsBetting is ERC2771Context, EIP712, Ownable2Step, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     IERC20Permit public immutable wejeToken;
     IERC20 public immutable wejeTokenERC20;
-    struct Match {
-        uint gameId;
-        bool isDrawable;
-        uint homeId;
-        uint awayId;
-        string homeName; 
-        string awayName;
-        string homeLogo;
-        string awayLogo;
-        uint gameTime;
-    }
+
+    bytes32 public constant OPEN_BET_TYPEHASH = keccak256(
+        "OpenBet(uint256 betId,uint256 amount,uint256 startDate,uint256 endDate,bytes32 uid,bytes32 affiliateId,address walletAddress,uint256 nonce,uint256 deadline)"
+    );
+
+    bytes32 public constant JOIN_BET_TYPEHASH = keccak256(
+        "JoinBet(uint256 betId,bytes32 uid,bytes32 affiliateId,address walletAddress,uint256 nonce,uint256 deadline)"
+    );
 
     struct User {
-        string uid;
-        string name;
-        string photoUrl;
+        bytes32 uid; // Hashed UID
+        bytes32 affiliateId; // Hashed Affiliate ID
         address walletAddress;
-        string affiliateId;
-    }
-
-    struct DistributionData {
-        string uid;
-        uint amount;
-    }
-    struct Selection {
-        uint gameId;
-        uint choice; // Enum for choices
     }
 
     struct Bet {
-    uint amount;
-    uint status;
-    uint betId; // Consider bytes32 for efficiency
-    uint pool;
-    uint startDate; //first match start date
-    uint endDate; // last match end date
-    string[] userIds;
-    Match[] matches;
-    Selection[] results;
-    mapping(string => UserWithSelections) userSelections;
-}
+        uint256 amount;
+        uint256 status; // 0: Open, 1: Running, 2: Finished, 3: Cancelled
+        uint256 betId;
+        uint256 pool;
+        uint256 startDate;
+        uint256 endDate;
+        bytes32[] participantIds;
+        mapping(bytes32 => User) participants;
+    }
 
     struct BetInfo {
-        uint amount;
-        uint betId;
-        uint startDate;
-        uint endDate;
+        uint256 amount;
+        uint256 betId;
+        uint256 startDate;
+        uint256 endDate;
     }
 
-    struct UserWithSelections {
-        string uid;
-        string name;
-        string photoUrl;
-        string affiliateId;
-        address walletAddress;
-        Selection[] selections;
+    struct DistributionData {
+        bytes32 uid;
+        uint256 amount;
     }
 
-    struct BetSelectionDetails {
-        uint amount;
-        uint status;
-        uint betId; // Consider bytes32 for efficiency
-        uint pool;
-        uint startDate; //first match start date
-        uint endDate; // last match end date
-        Match[] matches;
-        Selection[] results;
-        UserWithSelections[] userSelections;
+    struct PermitParams {
+        uint256 deadline;
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
     }
 
-    mapping(uint => Bet) private bets; // Mapping of formId to Bet
-    
-    uint[] private openBetIds;
-    uint[] private runningBetIds;
-    uint[] private finishedBetIds;
-
-    uint private commission;
-    bool private locked;
-    address private deployer;
-    uint private commissionRate;
-
-    event BetOpened(uint betId, string desc);
-    event BetJoined(uint betId, string desc);
-    event BetRunning(uint betId, string desc);
-    event BetFinished(uint betId, string desc);
-    event BetDeleted(uint betId, string desc);
-    event Received(address sender, uint256 amount); 
-
-     modifier onlyDeployer() {
-        require(msg.sender == deployer, "Only deployer can call this function");
-        _;
+    struct SignatureParams {
+        uint256 nonce;
+        uint256 deadline;
+        bytes signature;
     }
 
-    modifier nonReentrant() {
-        require(!locked, "ReentrancyGuard: reentrant call");
-        locked = true;
-        _;
-        locked = false;
-    }
+    mapping(uint256 => Bet) public bets;
+    mapping(address => uint256) public nonces;
 
-     constructor(address _wejeTokenAddress) {
-        deployer = msg.sender;
-        commissionRate = 1;
+    // O(1) Status tracking arrays and index mappings (1-based index: 0 = not in array)
+    uint256[] private openBetIds;
+    uint256[] private runningBetIds;
+
+    mapping(uint256 => uint256) private openBetIndex;
+    mapping(uint256 => uint256) private runningBetIndex;
+
+    uint256 public totalCommission;
+
+    event BetOpened(uint256 indexed betId, bytes32 indexed uid, uint256 amount, uint256 pool);
+    event BetJoined(uint256 indexed betId, bytes32 indexed uid, uint256 amount, uint256 pool);
+    event BetRunning(uint256 indexed betId);
+    event BetFinished(uint256 indexed betId);
+    event BetDeleted(uint256 indexed betId);
+    event CommissionCollected(uint256 indexed betId, uint256 commission);
+    event CommissionWithdrawn(address indexed recipient, uint256 amount);
+
+    constructor(address _wejeTokenAddress, address _trustedForwarder)
+        ERC2771Context(_trustedForwarder)
+        EIP712("SportsBetting", "1")
+        Ownable(msg.sender)
+    {
+        require(_wejeTokenAddress != address(0), "Invalid token address");
         wejeToken = IERC20Permit(_wejeTokenAddress);
         wejeTokenERC20 = IERC20(_wejeTokenAddress);
     }
-    
 
-     // Helper function to remove a bet ID from an array
-    function _removeBetIdFromArray(uint _betId, uint[] storage array) internal {
-        for (uint i = 0; i < array.length; i++) {
-            if (array[i] == _betId) {
-                array[i] = array[array.length - 1];
-                array.pop();
-                break;
+    // --- Internal O(1) List Management ---
+
+    function _addOpenBetId(uint256 _betId) internal {
+        openBetIds.push(_betId);
+        openBetIndex[_betId] = openBetIds.length;
+    }
+
+    function _removeOpenBetId(uint256 _betId) internal {
+        uint256 index1Based = openBetIndex[_betId];
+        if (index1Based > 0) {
+            uint256 idx = index1Based - 1;
+            uint256 lastId = openBetIds[openBetIds.length - 1];
+            if (idx != openBetIds.length - 1) {
+                openBetIds[idx] = lastId;
+                openBetIndex[lastId] = index1Based;
             }
+            openBetIds.pop();
+            delete openBetIndex[_betId];
         }
     }
-    
 
-    function openBet(BetInfo calldata _betInfo, Match[] calldata _matches, User calldata _openBy, Selection[] calldata _selections,
-    uint256 deadline,
-    uint8 v,
-    bytes32 r,
-    bytes32 s) public nonReentrant  {
-        require(_betInfo.amount >0, "not enough Balance");
+    function _addRunningBetId(uint256 _betId) internal {
+        runningBetIds.push(_betId);
+        runningBetIndex[_betId] = runningBetIds.length;
+    }
 
-         // Call permit first
-        wejeToken.permit(_openBy.walletAddress, address(this), _betInfo.amount, deadline, v, r, s);
+    function _removeRunningBetId(uint256 _betId) internal {
+        uint256 index1Based = runningBetIndex[_betId];
+        if (index1Based > 0) {
+            uint256 idx = index1Based - 1;
+            uint256 lastId = runningBetIds[runningBetIds.length - 1];
+            if (idx != runningBetIds.length - 1) {
+                runningBetIds[idx] = lastId;
+                runningBetIndex[lastId] = index1Based;
+            }
+            runningBetIds.pop();
+            delete runningBetIndex[_betId];
+        }
+    }
 
-        // Then transferFrom
-        bool success = wejeTokenERC20.transferFrom(_openBy.walletAddress, address(this), _betInfo.amount);
-        require(success, "Token transfer failed");
+    // --- Signature Verification Helpers ---
 
+    function _verifyOpenBetSignature(
+        BetInfo calldata _betInfo,
+        User calldata _user,
+        uint256 _nonce,
+        uint256 _deadline,
+        bytes memory _signature
+    ) internal {
+        require(block.timestamp <= _deadline, "Signature expired");
+        require(_nonce == nonces[_user.walletAddress]++, "Invalid nonce");
+
+        bytes32 structHash = keccak256(
+            abi.encode(
+                OPEN_BET_TYPEHASH,
+                _betInfo.betId,
+                _betInfo.amount,
+                _betInfo.startDate,
+                _betInfo.endDate,
+                _user.uid,
+                _user.affiliateId,
+                _user.walletAddress,
+                _nonce,
+                _deadline
+            )
+        );
+        bytes32 hash = _hashTypedDataV4(structHash);
+        require(
+            SignatureChecker.isValidSignatureNow(_user.walletAddress, hash, _signature),
+            "Invalid signer signature"
+        );
+    }
+
+    function _verifyJoinBetSignature(
+        uint256 _betId,
+        User calldata _user,
+        uint256 _nonce,
+        uint256 _deadline,
+        bytes memory _signature
+    ) internal {
+        require(block.timestamp <= _deadline, "Signature expired");
+        require(_nonce == nonces[_user.walletAddress]++, "Invalid nonce");
+
+        bytes32 structHash = keccak256(
+            abi.encode(
+                JOIN_BET_TYPEHASH,
+                _betId,
+                _user.uid,
+                _user.affiliateId,
+                _user.walletAddress,
+                _nonce,
+                _deadline
+            )
+        );
+        bytes32 hash = _hashTypedDataV4(structHash);
+        require(
+            SignatureChecker.isValidSignatureNow(_user.walletAddress, hash, _signature),
+            "Invalid signer signature"
+        );
+    }
+
+    // --- Core Betting Functions ---
+
+    /**
+     * @notice Open a new bet ticket with gas-sponsored EIP-712 / ERC-1271 signature and optional permit
+     * @dev Called by OpenZeppelin Relayers (gas sponsorship) or user directly / forwarder
+     */
+    function openBet(
+        BetInfo calldata _betInfo,
+        User calldata _user,
+        PermitParams calldata _permit,
+        SignatureParams calldata _sig
+    ) external nonReentrant {
+        require(_betInfo.amount > 0, "Amount > 0");
+        require(_betInfo.betId > 0, "Invalid bet ID");
+        require(_betInfo.startDate < _betInfo.endDate, "Invalid dates");
+        require(_betInfo.endDate > block.timestamp, "End date in past");
+        require(_user.walletAddress != address(0), "Invalid wallet address");
+        require(_user.uid != bytes32(0), "Invalid UID");
+        require(bets[_betInfo.betId].betId == 0, "Bet already exists");
+
+        // Authenticate user: Either via verified EIP-712/ERC-1271 signature (relayer) OR direct caller / ERC2771 forwarder
+        if (_sig.deadline > 0 || _sig.signature.length > 0) {
+            _verifyOpenBetSignature(_betInfo, _user, _sig.nonce, _sig.deadline, _sig.signature);
+        } else {
+            require(_user.walletAddress == _msgSender(), "Sender must match user wallet");
+        }
+
+        // Execute Permit if provided (try-catch eliminates front-running DoS / pull issues)
+        if (_permit.deadline > 0) {
+            try wejeToken.permit(_user.walletAddress, address(this), _betInfo.amount, _permit.deadline, _permit.v, _permit.r, _permit.s) {} catch {}
+        }
+        require(wejeTokenERC20.allowance(_user.walletAddress, address(this)) >= _betInfo.amount, "Insufficient allowance");
+
+        // State update (Checks-Effects-Interactions pattern)
         Bet storage bet = bets[_betInfo.betId];
         bet.amount = _betInfo.amount;
         bet.betId = _betInfo.betId;
-        bet.status = 0;
+        bet.status = 0; // Open
         bet.pool = _betInfo.amount;
         bet.startDate = _betInfo.startDate;
         bet.endDate = _betInfo.endDate;
-        bet.userSelections[_openBy.uid].uid = _openBy.uid;
-        bet.userSelections[_openBy.uid].name = _openBy.name;
-        bet.userSelections[_openBy.uid].walletAddress = _openBy.walletAddress;
-        bet.userSelections[_openBy.uid].photoUrl = _openBy.photoUrl;
-        bet.userSelections[_openBy.uid].affiliateId = _openBy.affiliateId;
-        for (uint i = 0; i < _selections.length; i++) {
-            bet.matches.push(_matches[i]);
-            bet.userSelections[_openBy.uid].selections.push(Selection({
-                gameId: _selections[i].gameId,
-                choice: _selections[i].choice
-            }));
-        }
-        bet.userIds.push(_openBy.uid);
-        openBetIds.push(_betInfo.betId);
-        emit BetOpened(_betInfo.betId, string(abi.encodePacked("Ticket is opened by ", _openBy.name)));
+
+        bet.participants[_user.uid] = _user;
+        bet.participantIds.push(_user.uid);
+
+        _addOpenBetId(_betInfo.betId);
+
+        // Pull tokens securely
+        wejeTokenERC20.safeTransferFrom(_user.walletAddress, address(this), _betInfo.amount);
+
+        emit BetOpened(_betInfo.betId, _user.uid, _betInfo.amount, bet.pool);
     }
 
-    function joinBet(uint _betId, Selection[] calldata _selections, User calldata _user,  uint256 deadline, uint8 v, bytes32 r, bytes32 s) public nonReentrant {
+    /**
+     * @notice Join an existing open bet ticket with gas-sponsored EIP-712 / ERC-1271 signature and optional permit
+     * @dev Called by OpenZeppelin Relayers (gas sponsorship) or user directly / forwarder
+     */
+    function joinBet(
+        uint256 _betId,
+        User calldata _user,
+        PermitParams calldata _permit,
+        SignatureParams calldata _sig
+    ) external nonReentrant {
         Bet storage bet = bets[_betId];
-        require(bet.betId >0, "Bet Ticket not found");
+        require(bet.betId > 0, "Bet Ticket not found");
         require(bet.status == 0, "Bet is not open");
+        require(block.timestamp <= bet.startDate, "Bet already started");
+        require(_user.walletAddress != address(0), "Invalid wallet address");
+        require(_user.uid != bytes32(0), "Invalid UID");
+        require(!isJoined(_betId, _user.uid), "Already joined");
 
-         // Call permit first
-        wejeToken.permit(_user.walletAddress, address(this), bet.amount, deadline, v, r, s);
-
-        // Then transferFrom
-        bool success = wejeTokenERC20.transferFrom(_user.walletAddress, address(this), bet.amount);
-        require(success, "Token transfer failed");
-
-        bet.userSelections[_user.uid].uid = _user.uid;
-        bet.userSelections[_user.uid].name = _user.name;
-        bet.userSelections[_user.uid].walletAddress = _user.walletAddress;
-        bet.userSelections[_user.uid].photoUrl = _user.photoUrl;
-        bet.userSelections[_user.uid].affiliateId = _user.affiliateId;
-        for (uint i = 0; i < _selections.length; i++) {
-            bet.userSelections[_user.uid].selections.push(Selection({
-                gameId: _selections[i].gameId,
-                choice: _selections[i].choice
-            }));
+        // Authenticate user:
+        if (_sig.deadline > 0 || _sig.signature.length > 0) {
+            _verifyJoinBetSignature(_betId, _user, _sig.nonce, _sig.deadline, _sig.signature);
+        } else {
+            require(_user.walletAddress == _msgSender(), "Sender must match user wallet");
         }
-        bet.userIds.push(_user.uid);
-        bets[_betId].pool += bet.amount;
 
-      emit BetJoined(_betId, string(abi.encodePacked("Ticket is opened by ", _user.name)));
+        // Try permit if passed
+        if (_permit.deadline > 0) {
+            try wejeToken.permit(_user.walletAddress, address(this), bet.amount, _permit.deadline, _permit.v, _permit.r, _permit.s) {} catch {}
+        }
+        require(wejeTokenERC20.allowance(_user.walletAddress, address(this)) >= bet.amount, "Insufficient allowance");
+
+        // Update state
+        bet.participants[_user.uid] = _user;
+        bet.participantIds.push(_user.uid);
+        bet.pool += bet.amount;
+
+        // Pull tokens safely
+        wejeTokenERC20.safeTransferFrom(_user.walletAddress, address(this), bet.amount);
+
+        emit BetJoined(_betId, _user.uid, bet.amount, bet.pool);
     }
 
-    function updateBetTicketStatus(uint _betId) external onlyDeployer  {
-        Bet storage bet = bets[_betId];
-        require(bet.betId >0, "Bet ticket not found");
-        require(bet.status == 0, "Status already either running or finished");
-        //check if only one user return money and delete ticket
-        if(bet.userIds.length == 1) {
-            UserWithSelections memory user = bet.userSelections[bet.userIds[0]];
-             address payable playerAddress = payable(user.walletAddress);
-             bool success = wejeTokenERC20.transfer(playerAddress, bets[_betId].amount);
-             require(success, "Token transfer failed");
-            delete bets[_betId];
-             _removeBetIdFromArray(_betId, openBetIds);
-           emit BetDeleted(_betId, "Only one user, ticket is deleted");
-        }else {
-            bets[_betId].status = 1;
-             // Move the bet ID from openBetIds to activeBetIds
-            _removeBetIdFromArray(_betId, openBetIds);
-            runningBetIds.push(_betId);
-            emit BetRunning(_betId, string(abi.encodePacked("Ticket status is running")));
-        }
-    }
-
-    function distributeWinners(uint _betId, DistributionData[] calldata distributionData) public onlyDeployer nonReentrant {
+    /**
+     * @notice Transition bet ticket to Running or Refund/Delete if only 1 participant
+     */
+    function updateBetTicketStatus(uint256 _betId) external onlyOwner nonReentrant {
         Bet storage bet = bets[_betId];
         require(bet.betId > 0, "Bet ticket not found");
-        require(bet.status == 1, "Bet already finished");
+        require(bet.status == 0, "Status already running/finished");
 
-        for (uint i = 0; i < distributionData.length; i++) {
-            UserWithSelections memory user = bet.userSelections[distributionData[i].uid];
-            require(bytes(user.uid).length > 0, "User not found");
-            //delete bets[_betId].userSelections[user.uid];
-            address payable userAddress = payable(user.walletAddress);
-            bool success = wejeTokenERC20.transfer(userAddress, distributionData[i].amount);
-            require(success, "Token transfer failed");
+        if (bet.participantIds.length == 1) {
+            // Refund the single user
+            bytes32 singleUser = bet.participantIds[0];
+            address playerAddress = bet.participants[singleUser].walletAddress;
+            _removeOpenBetId(_betId);
+            wejeTokenERC20.safeTransfer(playerAddress, bet.amount);
+            delete bets[_betId];
+            emit BetDeleted(_betId);
+        } else {
+            bet.status = 1;
+            _removeOpenBetId(_betId);
+            _addRunningBetId(_betId);
+            emit BetRunning(_betId);
         }
-
-        delete bets[_betId];
-         // Move the bet ID from activeBetIds to completedBetIds
-        _removeBetIdFromArray(_betId, runningBetIds);
-        emit BetFinished(_betId, "Distribution done, Ticket removed");
     }
 
-    function getTickets(uint _status, uint _offset, uint _limit) public view returns(BetSelectionDetails[] memory, uint totalCount) {
-        uint[] memory betIds;
-        if (_status == 0) {
-            betIds = openBetIds;
-        } else if (_status == 1) {
-            betIds = runningBetIds;
-        } else if (_status == 2) {
-            betIds = finishedBetIds;
+    /**
+     * @notice Distribute winnings safely to winners with pool protection
+     */
+    function distributeWinners(
+        uint256 _betId,
+        DistributionData[] calldata distributionData,
+        bool isFinal
+    ) public onlyOwner nonReentrant {
+        Bet storage bet = bets[_betId];
+        require(bet.betId > 0, "Bet ticket not found");
+        require(bet.status == 1, "Bet not running");
+
+        uint256 totalDistribute = 0;
+        for (uint256 i = 0; i < distributionData.length; i++) {
+            totalDistribute += distributionData[i].amount;
+        }
+        require(totalDistribute <= bet.pool, "Distribution exceeds pool");
+        bet.pool -= totalDistribute;
+
+        for (uint256 i = 0; i < distributionData.length; i++) {
+            bytes32 uid = distributionData[i].uid;
+            User memory user = bet.participants[uid];
+            require(user.walletAddress != address(0), "User not found");
+            
+            if (distributionData[i].amount > 0) {
+                wejeTokenERC20.safeTransfer(user.walletAddress, distributionData[i].amount);
+            }
         }
 
-        // Calculate the total number of bets
-        uint totalBets = betIds.length;
+        if (isFinal) {
+            uint256 commission = bet.pool;
+            if (commission > 0) {
+                totalCommission += commission;
+                bet.pool = 0;
+                emit CommissionCollected(_betId, commission);
+            }
 
-        // Adjust the limit if it exceeds the remaining bets
-        if (_offset + _limit > totalBets) {
-            _limit = totalBets - _offset;
+            bet.status = 2; // Finished
+            _removeRunningBetId(_betId);
+             delete bets[_betId];
+            emit BetFinished(_betId);
         }
-
-        // Initialize the result array
-        BetSelectionDetails[] memory result = new BetSelectionDetails[](_limit);
-
-        // Populate the result array in reverse order (latest first)
-        for (uint i = 0; i < _limit; i++) {
-            uint index = totalBets - _offset - i - 1;
-            result[i] = getTicketByUserId(betIds[index]);
-        }
-        
-        return (result, totalBets);
     }
 
-
-
-
-    function getTicketByUserId(uint _betId) public view returns (BetSelectionDetails memory) {
-    Bet storage bet = bets[_betId];
-    require(bet.betId > 0, "Ticket not found");
-
-    BetSelectionDetails memory betDetail;
-    betDetail.betId = _betId;
-    betDetail.pool = bet.pool;
-    betDetail.status = bet.status;
-    betDetail.amount = bet.amount;
-    betDetail.startDate = bet.startDate;
-    betDetail.endDate = bet.endDate;
-    betDetail.matches = bet.matches;
-
-    UserWithSelections[] memory userWithSelection = new UserWithSelections[](bet.userIds.length);
-    for (uint i = 0; i < bet.userIds.length; i++) {
-        userWithSelection[i].uid = bet.userSelections[bet.userIds[i]].uid;
-        userWithSelection[i].name = bet.userSelections[bet.userIds[i]].name;
-        userWithSelection[i].photoUrl = bet.userSelections[bet.userIds[i]].photoUrl;
-        userWithSelection[i].walletAddress = bet.userSelections[bet.userIds[i]].walletAddress;
-        userWithSelection[i].affiliateId = bet.userSelections[bet.userIds[i]].affiliateId;
-        if (bet.userSelections[bet.userIds[i]].walletAddress == msg.sender || bet.status > 0) {
-             userWithSelection[i].selections = bet.userSelections[bet.userIds[i]].selections;
-        }else{
-            userWithSelection[i].selections = new Selection[](0);
-        }
-       
-    }
-    betDetail.userSelections = userWithSelection;
-    
-    // check if match result is there return resul
-    if(bet.status == 2){
-    betDetail.results = bet.results;
+    /**
+     * @notice Withdraw collected commission to recipient address
+     */
+    function withdrawCommission(address recipient, uint256 amount) external onlyOwner nonReentrant {
+        require(recipient != address(0), "Invalid recipient");
+        require(amount <= totalCommission, "Amount exceeds commission");
+        totalCommission -= amount;
+        wejeTokenERC20.safeTransfer(recipient, amount);
+        emit CommissionWithdrawn(recipient, amount);
     }
 
-    return betDetail;
-}
+    // --- View & Helper Functions ---
 
-
- function getTicketByIdWithSelections(uint _betId) public view onlyDeployer returns (BetSelectionDetails memory) {
-    Bet storage bet = bets[_betId];
-    require(bet.betId > 0, "Ticket not found");
-
-    BetSelectionDetails memory betDetail;
-    betDetail.betId = _betId;
-    betDetail.pool = bet.pool;
-    betDetail.status = bet.status;
-    betDetail.amount = bet.amount;
-    betDetail.startDate = bet.startDate;
-    betDetail.endDate = bet.endDate;
-    betDetail.matches = bet.matches;
-
-    UserWithSelections[] memory userWithSelection = new UserWithSelections[](bet.userIds.length);
-    for (uint i = 0; i < bet.userIds.length; i++) {
-        userWithSelection[i].uid = bet.userSelections[bet.userIds[i]].uid;
-        userWithSelection[i].name = bet.userSelections[bet.userIds[i]].name;
-        userWithSelection[i].photoUrl = bet.userSelections[bet.userIds[i]].photoUrl;
-        userWithSelection[i].walletAddress = bet.userSelections[bet.userIds[i]].walletAddress;
-        userWithSelection[i].affiliateId = bet.userSelections[bet.userIds[i]].affiliateId;
-        userWithSelection[i].selections = bet.userSelections[bet.userIds[i]].selections;
+    function getBetInfo(uint256 _betId) external view returns (
+        uint256 amount,
+        uint256 status,
+        uint256 pool,
+        uint256 startDate,
+        uint256 endDate,
+        uint256 participantsCount
+    ) {
+        Bet storage bet = bets[_betId];
+        return (bet.amount, bet.status, bet.pool, bet.startDate, bet.endDate, bet.participantIds.length);
     }
-    betDetail.userSelections = userWithSelection;
-    return betDetail;
-}
 
+    function isJoined(uint256 _betId, bytes32 _uid) public view returns (bool) {
+        Bet storage bet = bets[_betId];
+        return bet.participants[_uid].walletAddress != address(0);
+    }
 
-     // Function to transfer matic to recipient
-    function transferMatic(address payable recipient, uint amount) external onlyDeployer {
-        require(recipient != address(0), "Invalid recipient address");
-        uint256 contractBalance = wejeTokenERC20.balanceOf(address(this));
-        require(contractBalance >= amount, "Insufficient balance");
-        bool success = wejeTokenERC20.transfer(recipient, amount);
-        require(success, "Token transfer failed");
+    function getParticipantIds(uint256 _betId) external view returns (bytes32[] memory) {
+        return bets[_betId].participantIds;
+    }
+
+    function getBetsByStatus(uint256 _status) external view returns (uint256[] memory) {
+        if (_status == 0) return openBetIds;
+        if (_status == 1) return runningBetIds;
+        revert("Invalid status");
+    }
+
+    // --- Context Overrides for ERC2771 ---
+
+    function _msgSender() internal view virtual override(Context, ERC2771Context) returns (address) {
+        return ERC2771Context._msgSender();
+    }
+
+    function _msgData() internal view virtual override(Context, ERC2771Context) returns (bytes calldata) {
+        return ERC2771Context._msgData();
+    }
+
+    function _contextSuffixLength() internal view virtual override(Context, ERC2771Context) returns (uint256) {
+        return ERC2771Context._contextSuffixLength();
     }
 }

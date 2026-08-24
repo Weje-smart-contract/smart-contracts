@@ -8,7 +8,26 @@ require("dotenv").config();
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
   solidity: {
-    version: "0.8.30",
+    compilers: [
+      {
+        version: "0.8.24", // Matches your Weje contracts
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200,
+          },
+        },
+      },
+      {
+        version: "0.8.30", // Matches your Weje contracts
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200,
+          },
+        },
+      },
+    ],
     settings: {
       optimizer: {
         enabled: true,
@@ -24,7 +43,6 @@ module.exports = {
       url: process.env.POLYGON_RPC_URL || "https://polygon-rpc.com/",
       accounts: process.env.POLYGON_PRIVATE_KEY ? [process.env.POLYGON_PRIVATE_KEY] : [],
       chainId: 137,
-      gasPrice: 35000000000, // 35 gwei
       timeout: 60000,
     },
 
@@ -33,26 +51,13 @@ module.exports = {
       url: process.env.AMOY_RPC_URL || "https://rpc-mumbai.maticvigil.com/",
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       chainId: 80002,
-      gasPrice: 20000000000, // 20 gwei
       timeout: 60000,
     }
   },
-
+  
   // Etherscan verification
   etherscan: {
-    apiKey: {
-      polygon: process.env.POLYGONSCAN_API_KEY || "",
-    },
-    customChains: [
-      {
-        network: "polygon",
-        chainId: 137,
-        urls: {
-          apiURL: "https://api.polygonscan.com/api",
-          browserURL: "https://polygonscan.com"
-        }
-      }
-    ]
+    apiKey: process.env.POLYGONSCAN_API_KEY, // your single V2 key here
   },
 
   // Contract size reporting
@@ -61,7 +66,7 @@ module.exports = {
     disambiguatePaths: false,
     runOnCompile: true,
     strict: true,
-    only: ["WejeToken", "WejePresale", "WejeVesting", "WejeStaking"],
+    only: ["WejeToken", "WejePresale", "WejeVesting", "WejeStaking","SportsBetting", "PredictionTickets"],
   },
 
   // Code coverage

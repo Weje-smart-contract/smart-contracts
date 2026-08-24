@@ -2,10 +2,12 @@
 pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 abstract contract GameUtil {
     IERC20Permit public immutable wejeToken;
     IERC20 public immutable wejeTokenERC20;
+
     address public deployer;
     uint public commissionRate;
     uint public commission;
@@ -51,6 +53,13 @@ abstract contract GameUtil {
         bool isPublic;
         uint rTimeout;
         uint gameTime;
+    }
+
+    struct PermitParams {
+        uint256 deadline;
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
     }
 
     mapping(string => Game) public games;
@@ -183,9 +192,9 @@ abstract contract GameUtil {
     }
 
     // Abstract functions that each game must implement
-    function createGame(GameInfo calldata _game, Player calldata player, string[] calldata _invPlayers, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external virtual;
-    function joinGame(string memory gameId, Player calldata player, uint amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external virtual;
+    function createGame(GameInfo calldata _game, Player calldata player, string[] calldata _invPlayers, PermitParams calldata _permit) external virtual;
+    function joinGame(string memory gameId, Player calldata player, uint amount, PermitParams calldata _permit) external virtual;
     function leaveGame(string memory gameId, PlayerCall[] memory players, uint256 date) external virtual;
-    function buyCoins(string memory gameId, string memory playerId, uint depositAmount, uint256 date, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external virtual;
+    function buyCoins(string memory gameId, string memory playerId, uint depositAmount, uint256 date, PermitParams calldata _permit) external virtual;
     function finishHand(string memory gameId, PlayerCall[] memory players, uint256 date) external virtual;
 }

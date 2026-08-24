@@ -1,0 +1,16 @@
+{
+  "contract": "PredictionTickets",
+  "network": "polygon",
+  "chainId": 137,
+  "deployer": "0x558caf438fD129e2472FA1fe3776d02a6D0DeA95",
+  "owner": "0x558caf438fD129e2472FA1fe3776d02a6D0DeA95",
+  "deploymentTimestamp": "2026-08-24T08:38:52.082Z",
+  "addresses": {
+    "wejeToken": "0xB0412e8EcfDF82197f3dC782803a63EF3557404d",
+    "trustedForwarder": "0x48653CF2F2754Db856159E45893686F4f0F4BA0D",
+    "predictionTickets": "0x7801907c9A3255384524F57Fe0Cd40d4C63fd156"
+  },
+  "verificationCommands": [
+    "npx hardhat verify --network polygon 0x7801907c9A3255384524F57Fe0Cd40d4C63fd156 0xB0412e8EcfDF82197f3dC782803a63EF3557404d 0x48653CF2F2754Db856159E45893686F4f0F4BA0D"
+  ]
+}
